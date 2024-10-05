@@ -13,10 +13,9 @@
 #include <wx/notebook.h>
 #include <wx/snglinst.h>
 
-#include <fstream>
 #include <memory>
-#include <nlohmann/json.hpp>
 
+#include "constants.hpp"
 #include "custom.hpp"
 #include "entry.hpp"
 #include "gmanager.hpp"
@@ -121,9 +120,11 @@ class ScanningAllThread : public MyThread {
 
 class BackgroundScanAll : public MyThread {
  public:
-  BackgroundScanAll(wxFrame* frame, std::vector<bro::Item>* items)
+  BackgroundScanAll(wxFrame* frame, std::vector<bro::Item>* items,
+                    unsigned nScan = 1)
       : MyThread(frame) {
     m_items = items;
+    m_nScan = nScan;
   }
 
  private:
@@ -131,6 +132,7 @@ class BackgroundScanAll : public MyThread {
   virtual void* Entry() wxOVERRIDE;
 
   std::vector<bro::Item>* m_items;
+  unsigned m_nScan;
 };
 
 class InstallHook : public MyThread {
@@ -195,7 +197,7 @@ class MyFrame : public wxFrame {
   void OnOpenConfig(wxCommandEvent&);
   void OnSaveConfig(wxCommandEvent&);
   void OnSaveConfigAs(wxCommandEvent&);
-  void OnAddNewEntry(wxCommandEvent& event);
+  void OnAddNewEntry(wxCommandEvent&);
   void OnEnsureScanAll(wxCommandEvent&);
 
   void OnThreadCancel(wxThreadEvent&);
@@ -224,7 +226,7 @@ class MyFrame : public wxFrame {
   void DoStartMonitorCharacter();
   void DoStartLookup();
   void DoStartScanAll();
-  void DoBackgroundScanning();
+  void DoBackgroundScanning(unsigned nScan);
   void DoInstallHook();
   void DoStartScan(bro::Entry& entry, unsigned row);
   void DoToggle(bro::Item& item, bool enable, unsigned row, unsigned col = 0);
@@ -304,7 +306,7 @@ bool MyApp::OnInit() {
 }
 
 MyFrame::MyFrame(const wxString& title)
-    : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(400, 600)),
+    : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(400, 500)),
       m_title(title) {
   m_entry_ctrl = NULL;
   m_log = NULL;
@@ -374,10 +376,6 @@ MyFrame::MyFrame(const wxString& title)
   // m_log->SetMinSize(wxSize(-1, 100));
   // wxLog::SetActiveTarget(new wxLogTextCtrl(m_log));
 
-  // wxStreamToTextRedirector redirect(m_log);
-  // wxString str("Outputed to cout, appears in wxTextCtrl!");
-  // wxSTD cout << str << wxSTD endl;
-
   m_notebook = new wxNotebook(this, wxID_ANY);
 
   // first page of the notebook
@@ -387,7 +385,6 @@ MyFrame::MyFrame(const wxString& title)
 
   // frame -> mainsizer -> notebook -> panels -> sizer -> [dvctrl]
   wxSizer* firstPanelSz = new wxBoxSizer(wxVERTICAL);
-
 
   firstPanelSz->Add(m_entry_ctrl, 1, wxGROW | wxALL, this->FromDIP(5));
   firstPanel->SetSizerAndFit(firstPanelSz);
@@ -456,22 +453,6 @@ MyFrame::~MyFrame() {
   app.m_semAllDone.Wait();
 }
 
-using json = nlohmann::json;
-
-namespace nosj {
-
-namespace ent {
-
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(nosj::ent::Entry, adr_alias, disable, enable,
-                                   scan, offset);
-}  // namespace ent
-
-namespace it {
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(nosj::it::Item, id, name, records);
-
-}  // namespace it
-
-}  // namespace nosj
 
 namespace err {
 const wxString noData = "No data";
@@ -485,39 +466,22 @@ void MyFrame::InitEntryCtrl(wxWindow* parent) {
   m_entry_ctrl->AssociateModel(m_model.get());
   m_entry_ctrl->Disable();
 
-  std::ifstream file("entries.json");
+  const auto& items = compiled_json::Entries::get();
 
-  if (!file) {
-    SetStatusText(
-        wxString::Format("%s: json file was not found!", err::noData));
-    return;
-  }
+  for (const auto& item : items) {
+    bro::Item temp{(unsigned)item["id"].get<std::uint64_t>(),
+                   std::string(item["name"].get<std::string_view>())};
 
-  json items;
-
-  try {
-    file >> items;
-
-    if (!items.is_array()) {
-      SetStatusText(
-          wxString::Format("%s: %s", err::noData, err::incorrectFormat));
-      return;
+    for (const auto& rec : item["records"]) {
+      temp.records.push_back(
+          bro::Entry(std::string(rec["adr_alias"].get<std::string_view>()),
+                     std::string(rec["disable"].get<std::string_view>()),
+                     std::string(rec["enable"].get<std::string_view>()),
+                     std::string(rec["scan"].get<std::string_view>()),
+                     rec["offset"].get<int64_t>()));
     }
 
-    for (nosj::it::Item item : items) {
-      bro::Item temp({item.id, item.name});
-      temp.records.clear();
-
-      for (nosj::ent::Entry rec : item.records) {
-        temp.records.push_back(bro::Entry(rec.adr_alias, rec.disable,
-                                          rec.enable, rec.scan, rec.offset));
-      }
-
-      m_Items.push_back(temp);
-    }
-  } catch (const json::exception& e) {
-    SetStatusText(
-        wxString::Format("Warning: %s (%08X)", err::incorrectFormat, e.id));
+    m_Items.push_back(temp);
   }
 
   wxDataViewColumn* const col0 = m_entry_ctrl->AppendToggleColumn("Active");
@@ -645,10 +609,10 @@ void MyFrame::DoInstallHook() {
   }
 }
 
-void MyFrame::DoBackgroundScanning() {
+void MyFrame::DoBackgroundScanning(unsigned nScan) {
   if (!m_lookedUp) return;
 
-  BackgroundScanAll* thr = new BackgroundScanAll(this, &m_Items);
+  BackgroundScanAll* thr = new BackgroundScanAll(this, &m_Items, nScan);
   {
     wxCriticalSectionLocker enter(wxGetApp().m_critsect);
     wxGetApp().m_threads.Add(thr);
@@ -739,7 +703,7 @@ void MyFrame::DoStartMonitorCharacter() {
 
 // MyFrame - event handlers
 
-void MyFrame::OnLookupCompletion(wxThreadEvent& evt) {
+void MyFrame::OnLookupCompletion(wxThreadEvent& WXUNUSED(evt)) {
   this->SetStatusText("Ready");
   this->m_entry_ctrl->Enable();
 
@@ -785,7 +749,7 @@ void MyFrame::OnScanningAllCompletion(wxThreadEvent& evt) {
   // }
 }
 
-void MyFrame::OnScanningAllStart(wxThreadEvent& evt) {
+void MyFrame::OnScanningAllStart(wxThreadEvent& WXUNUSED(evt)) {
   for (unsigned row = 0; row < m_Items.size(); row++) {
     m_model->SetValue(wxEmptyString, m_entry_ctrl->RowToItem(row), Col_Status);
     m_model->RowValueChanged(row, Col_Status);
@@ -809,7 +773,7 @@ void MyFrame::OnScanCharaUpdate(wxThreadEvent& evt) {
 
   if (!m_scanAtStage) {
     m_scanAtStage = true;
-    DoBackgroundScanning();
+    DoBackgroundScanning(2);
   }
 
   const auto& items = app.m_pyItems;
@@ -876,8 +840,7 @@ void MyFrame::OnScanCharaUpdate(wxThreadEvent& evt) {
 
   } else {
     // Create new panel and append new page
-    m_notebook->AddPage(CreateCharaPage(m_notebook, items, title),
-                        title);
+    m_notebook->AddPage(CreateCharaPage(m_notebook, items, title), title);
   }
 
   // Refresh the layout to reflect changes
@@ -963,7 +926,7 @@ void MyFrame::DoSaveConfig(const wxString& configPath) {
   wxString str('0', m_entry_ctrl->GetItemCount());
 
   // Iterate through your DataViewListCtrl and save the state
-  for (int row = 0; row < str.size(); ++row) {
+  for (unsigned row = 0; row < str.size(); ++row) {
     // Checkbox active or not
     if (m_entry_ctrl->GetToggleValue(row, 0)) {
       str[row] = '1';
@@ -990,7 +953,7 @@ void MyFrame::OnSaveConfigAs(wxCommandEvent& WXUNUSED(event)) {
   DoSaveConfig(saveFileDialog.GetPath());
 }
 
-void MyFrame::OnAddNewEntry(wxCommandEvent& event) {
+void MyFrame::OnAddNewEntry(wxCommandEvent& WXUNUSED(event)) {
   // TODO
 }
 
@@ -1055,8 +1018,12 @@ void MyFrame::OnEditValue(wxDataViewEvent& event) {
         ctrl->SetValue(wxVariant(dblVal).GetString(), row, 1);
 
         // Update the memory
-        GameManager(app.m_gamePid)
-            .WriteMemory((double*)item.valueAddress, &dblVal);
+        try {
+          GameManager(app.m_gamePid)
+              .WriteMemory((double*)item.valueAddress, &dblVal);
+        } catch (const std::exception& ex) {
+          wxMessageBox(ex.what(), "Error (Exception)", wxOK | wxICON_ERROR);
+        }
 
       } else {
         wxMessageBox("Invalid input. Please enter a decimal.", "Error",
@@ -1072,8 +1039,12 @@ void MyFrame::OnEditValue(wxDataViewEvent& event) {
             (py::PyIntObject*)app.m_pyLongBasePtr + intVal;
 
         // Update the memory
-        GameManager(app.m_gamePid)
-            .WriteMemory((uintptr_t*)item.valueAddress, &pyIntValue);
+        try {
+          GameManager(app.m_gamePid)
+              .WriteMemory((uintptr_t*)item.valueAddress, &pyIntValue);
+        } catch (const std::exception& ex) {
+          wxMessageBox(ex.what(), "Error (Exception)", wxOK | wxICON_ERROR);
+        }
       } else {
         wxMessageBox("Invalid input. Please enter a number 0-255.", "Error",
                      wxOK | wxICON_ERROR);
@@ -1186,29 +1157,33 @@ wxThread::ExitCode LookupThread::Entry() {
 // BackgroundScanAll
 
 wxThread::ExitCode BackgroundScanAll::Entry() {
-  MyApp& app = wxGetApp();
-  if (this->TestDestroy()) return NULL;
-  {
-    wxCriticalSectionLocker locker(app.m_critsect);
-    if (app.m_shuttingDown) return NULL;
-  }
-
-  // Do our real loop scanning for every item
-  for (auto& item : *m_items) {
+  for (unsigned i = 0; i < m_nScan; i++) {
+    MyApp& app = wxGetApp();
     if (this->TestDestroy()) return NULL;
-    try {
+    {
       wxCriticalSectionLocker locker(app.m_critsect);
       if (app.m_shuttingDown) return NULL;
-
-      // Inner loop for every records in an item
-      for (auto& record : item.records) {
-        record.EnsureScan(app.m_gamePid);
-      }
-    } catch (const std::exception& ex) {
-      // TODO
     }
-    // Delay between entries
-    wxThread::Sleep(100);
+
+    // Do our real loop scanning for every item
+    for (auto& item : *m_items) {
+      if (this->TestDestroy()) return NULL;
+      try {
+        wxCriticalSectionLocker locker(app.m_critsect);
+        if (app.m_shuttingDown) return NULL;
+
+        // Inner loop for every records in an item
+        for (auto& record : item.records) {
+          record.EnsureScan(app.m_gamePid);
+        }
+      } catch (const std::exception& ex) {
+        // TODO
+      }
+      // Delay between entries
+      wxThread::Sleep(100);
+    }
+    // Delay between number of batch
+    wxThread::Sleep(1000 * 5);
   }
 
   return (wxThread::ExitCode)0;  // success
@@ -1243,7 +1218,7 @@ wxThread::ExitCode ScanningAllThread::Entry() {
         // Inner loop for every records in an item
         for (auto& record : m_items->at(i).records) {
           try {
-            if (!record.Address()) record.EnsureScan(app.m_gamePid);
+            record.EnsureScan(app.m_gamePid);
             // Check scanned records was ok
             if (record.Address()) adrFound++;
           } catch (const std::exception& ex) {
@@ -1385,7 +1360,6 @@ wxThread::ExitCode InstallHook::Entry() {
 
     app.m_pyLongBasePtr =
         game.FindPattern(pyLongPattern, app.m_pyModuleBaseAdr);
-
     if (!app.m_pyLongBasePtr) {
       return Reject("Python type::long pattern was not found.");
     }

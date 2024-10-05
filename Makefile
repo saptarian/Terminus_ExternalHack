@@ -1,6 +1,6 @@
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)\Terminus_ExternalHack.exe
-SRCS = util.cpp gmanager.cpp entry.cpp custom.cpp main.cpp sample.rc
+SRCS = util.cpp gmanager.cpp entry.cpp custom.cpp constants.cpp main.cpp sample.rc
 OBJS = $(SRCS:%=$(BUILD_DIR)/%.o)
 
 CXX = i686-w64-mingw32-g++
@@ -10,6 +10,7 @@ LDFLAGS = -Wl,--subsystem,windows -static \
 	-static-libgcc -static-libstdc++ -mwindows
 CXXINCLUDES = -I.. -I..\include -I..\lib\Win32\Release\mswu \
 	-ID:\suspect\me\CProject\json\include \
+	-ID:\suspect\me\CProject\json2cpp\include \
 	-IC:\Users\LENOVO\.conda\envs\py379\include
 WXLIBS=-L..\lib\Win32\Release -lwxmsw32u_core -lwxbase32u \
 	-lwxtiff -lwxjpeg -lwxpng -lwxzlib -lwxregexu -lwxexpat
