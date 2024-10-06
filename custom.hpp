@@ -2,6 +2,7 @@
 #define CUSTOM_HPP
 
 #include <wx/dataview.h>
+#include <wx/dialog.h>
 #include <wx/wxprec.h>
 
 #ifndef WX_PRECOMP
@@ -36,6 +37,17 @@ class StatusRenderer : public wxDataViewCustomRenderer {
 
  private:
   wxString m_value;
+};
+
+// AboutDialog
+
+class AboutDialog : public wxDialog {
+ public:
+  AboutDialog(wxWindow *parent, wxWindowID id, const wxString &title);
+
+ private:
+  void InitUI();
+  const wxString &m_title;
 };
 
 #endif /*CUSTOM_HPP*/

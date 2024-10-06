@@ -3,13 +3,11 @@
 
 #include <chrono>
 #include <stdexcept>
-#include <utility>
 
 #ifndef WX_PRECOMP
 #include <wx/wx.h>
 #endif
 
-#include <wx/aboutdlg.h>
 #include <wx/notebook.h>
 #include <wx/snglinst.h>
 
@@ -19,6 +17,7 @@
 #include "custom.hpp"
 #include "entry.hpp"
 #include "gmanager.hpp"
+#include "pymemory.hpp"
 #include "type.hpp"
 #include "util.hpp"
 
@@ -226,7 +225,7 @@ class MyFrame : public wxFrame {
   void DoStartMonitorCharacter();
   void DoStartLookup();
   void DoStartScanAll();
-  void DoBackgroundScanning(unsigned nScan);
+  void DoBackgroundScanning(unsigned nScan = 1);
   void DoInstallHook();
   void DoStartScan(bro::Entry& entry, unsigned row);
   void DoToggle(bro::Item& item, bool enable, unsigned row, unsigned col = 0);
@@ -286,13 +285,13 @@ bool MyApp::OnInit() {
   m_checker = std::make_unique<wxSingleInstanceChecker>();
 
   if (m_checker->IsAnotherRunning()) {
-    wxLogError(_("Another program instance is already running, aborting."));
+    wxLogError(_("Another instance of the program is running. Aborting."));
     return false;
   }
 
   if (!util::EnableDebugPrivilege()) {
     wxLogError(
-        _("Failed to enable debug privilege. Try Run as administrator!"));
+        _("Failed to enable debug privilege. Try run as administrator!"));
     return false;
   }
 
@@ -306,19 +305,19 @@ bool MyApp::OnInit() {
 }
 
 MyFrame::MyFrame(const wxString& title)
-    : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(400, 500)),
+    : wxFrame(NULL, wxID_ANY, title, wxDefaultPosition, wxSize(470, 550)),
       m_title(title) {
   m_entry_ctrl = NULL;
   m_log = NULL;
 
-  SetIcon(wxICON(sample));
+  this->SetIcon(wxICON(sample));
 
   // Create menus and status bar.
   wxMenu* fileMenu = new wxMenu;
   fileMenu->Append(Id_OpenConfig, "&Load Config...",
-                   "Load latest saved on/off state.");
-  fileMenu->Append(Id_SaveConfig, "&Save Config", "Save current on/off state.");
-  fileMenu->Append(Id_SaveConfigAs, "Save As...", "Save current on/off state.");
+                   "Load the latest saved state.");
+  fileMenu->Append(Id_SaveConfig, "&Save Config", "Save the current state.");
+  fileMenu->Append(Id_SaveConfigAs, "Save As...", "Save the current state.");
   fileMenu->Append(wxID_EXIT, wxEmptyString, "Disable all and quit safely.");
 
   wxMenu* editMenu = new wxMenu;
@@ -326,7 +325,7 @@ MyFrame::MyFrame(const wxString& title)
   editMenu->AppendSeparator();
   // TODO: editMenu->Append(Id_AddNewEntry, "&Add New Entry...");
   editMenu->Append(Id_EnsureScanAll, "Ensure &Scan All",
-                   "Ensure every entry working properly.");
+                   "Ensure every entry is working properly.");
   editMenu->AppendSeparator();
   editMenu->Append(Id_DisableAll, "&Disable All");
 
@@ -415,11 +414,14 @@ MyFrame::MyFrame(const wxString& title)
   DoStartLookup();
 }
 
+// Closing procedure
 MyFrame::~MyFrame() {
   MyApp& app = wxGetApp();
 
+  // Check if the game has been running
   if (m_lookedUp) {
     for (auto& item : m_Items) {
+      // Disable every enabled records in every item
       for (auto& rec : item.records) {
         if (rec.Enabled()) rec.Disable(app.m_gamePid);
       }
@@ -428,6 +430,9 @@ MyFrame::~MyFrame() {
   {
     wxCriticalSectionLocker locker(app.m_critsect);
 
+    // Check if some memory has been allocated in the game memory
+    // which means the hook has been installed too
+    // so reset to default instructions then freeing the allocated memory
     if (auto remoteBuffer = app.m_pyRemoteBuffer) {
       try {
         GameManager game(app.m_gamePid);
@@ -439,25 +444,19 @@ MyFrame::~MyFrame() {
       }
     }
 
-    // check if we have any threads running first
+    // Check if we have any threads running
     const wxArrayThread& threads = app.m_threads;
     size_t count = threads.GetCount();
 
     if (!count) return;
 
-    // set the flag indicating that all threads should exit
+    // Set the flag indicating that all threads should exit
     app.m_shuttingDown = true;
   }
 
   // now wait for them to really terminate
   app.m_semAllDone.Wait();
 }
-
-
-namespace err {
-const wxString noData = "No data";
-const wxString incorrectFormat = "incorrect file format";
-}  // namespace err
 
 void MyFrame::InitEntryCtrl(wxWindow* parent) {
   m_entry_ctrl = new MyDataViewListCtrl(parent);
@@ -490,12 +489,14 @@ void MyFrame::InitEntryCtrl(wxWindow* parent) {
 
   wxDataViewColumn* const col1 = m_entry_ctrl->AppendTextColumn("Description");
   col1->SetMinWidth(150);
-  col1->SetWidth(200);
+  col1->SetWidth(320);
 
   wxDataViewColumn* col2 =
       new wxDataViewColumn("Status", new StatusRenderer(), Col_Status);
   m_entry_ctrl->AppendColumn(col2);
   col2->SetMinWidth(50);
+  col2->SetWidth(50);
+
 
   wxVector<wxVariant> data;
 
@@ -546,6 +547,7 @@ wxPanel* MyFrame::CreateCharaPage(wxWindow* parent,
     data.push_back("No data available");
     data.push_back(wxEmptyString);
     ctrl->AppendItem(data);
+    ctrl->Disable();
   } else {
     for (const auto& item : items) {
       wxVariant vvalue;
@@ -561,6 +563,7 @@ wxPanel* MyFrame::CreateCharaPage(wxWindow* parent,
       data.push_back(vvalue.GetString());
       ctrl->AppendItem(data);
     }
+    ctrl->Enable();
   }
 
   m_player_ctrls[name] = ctrl;
@@ -635,6 +638,7 @@ void MyFrame::DoStartScanAll() {
   if (thr->Create() != wxTHREAD_NO_ERROR || thr->Run() != wxTHREAD_NO_ERROR) {
     this->SetStatusText("Could not create thread.");
   } else {
+    // Thread running, show the progress bar and set the initial value
     m_progressBar->Show();
     m_progressBar->SetValue(0);
   }
@@ -643,6 +647,7 @@ void MyFrame::DoStartScanAll() {
 void MyFrame::DoStartScan(bro::Entry& entry, unsigned row) {
   if (!m_lookedUp) return;
 
+  // Scan just started, reset the status value in the UI
   m_model->SetValue(wxEmptyString, m_entry_ctrl->RowToItem(row), Col_Status);
   m_model->RowValueChanged(row, Col_Status);
 
@@ -666,17 +671,23 @@ void MyFrame::DoToggle(bro::Item& item, bool enable, unsigned row,
       unsigned shouldEnabled = 0;
 
       for (auto& record : item.records) {
+        // Try to toogle the record
         record.Enable(pid, enable);
+        // Check if the record was successfully changed
         if (record.Enabled() == enable) shouldEnabled++;
       }
 
+      // Check all records in an item were successfully changed
       if (item.records.size() != shouldEnabled) {
+        // If fail, ensure every record state changed back to previous state
+        // before call this function
         for (auto& record : item.records) {
           record.Enable(pid, !enable);
         }
         m_eventFromProgram = true;
         m_entry_ctrl->SetToggleValue(!enable, row, col);
       } else {
+        // If so, toggle the checkbox in the UI
         m_eventFromProgram = true;
         m_entry_ctrl->SetToggleValue(enable, row, col);
       }
@@ -709,7 +720,7 @@ void MyFrame::OnLookupCompletion(wxThreadEvent& WXUNUSED(evt)) {
 
   m_lookedUp = true;
 
-  // Process id have already found otherwise no way to reach this func
+  // Process id have already found otherwise no way to reach this
   DoStartScanAll();
 }
 
@@ -724,11 +735,13 @@ void MyFrame::OnScanningCompletion(wxThreadEvent& evt) {
   ScanPayload payload = evt.GetPayload<ScanPayload>();
   // wxLogMessage("Done scanning %s", payload.name);
 
+  // Set status in the UI whether is OK or Fail
   if (payload.isOk) {
     m_model->SetValue("OK", m_entry_ctrl->RowToItem(payload.row), Col_Status);
   } else {
     m_model->SetValue("Fail", m_entry_ctrl->RowToItem(payload.row), Col_Status);
   }
+  // We changed the value so let the model know and take care of it
   m_model->RowValueChanged(payload.row, Col_Status);
 }
 
@@ -738,20 +751,15 @@ void MyFrame::OnScanningAllCompletion(wxThreadEvent& evt) {
   m_progressBar->Hide();
   m_progressBar->SetValue(0);
 
+  // Start install hook after the scanning thread
   DoInstallHook();
-
-  // wxString configPath = wxGetCwd() + "/config.txt";
-  // if (!wxFileExists(configPath)) return;
-
-  // wxTextFile configFile(configPath);
-  // if (configFile.Open() && !configFile.Eof()) {
-  //   DoLoadConfig(configFile.GetFirstLine());
-  // }
 }
 
 void MyFrame::OnScanningAllStart(wxThreadEvent& WXUNUSED(evt)) {
   for (unsigned row = 0; row < m_Items.size(); row++) {
+    // We just started scan so empty the current status in the UI
     m_model->SetValue(wxEmptyString, m_entry_ctrl->RowToItem(row), Col_Status);
+    // We changed the value so let the model know and take care of it
     m_model->RowValueChanged(row, Col_Status);
   }
 }
@@ -767,18 +775,21 @@ void MyFrame::OnScanCharaUpdate(wxThreadEvent& evt) {
   MyApp& app = wxGetApp();
   wxCriticalSectionLocker locker(app.m_critsect);
 
+  // Get the updated data from running thread as a payload
   auto payload =
       evt.GetPayload<std::pair<uintptr_t, std::vector<py::PyItem>>>();
   app.m_pyItems = payload.second;
 
+  // Once any character has been found, initiate a new thread
+  // for re-scanning all entries (ONCE) to make sure they work properly
   if (!m_scanAtStage) {
     m_scanAtStage = true;
-    DoBackgroundScanning(2);
+    DoBackgroundScanning();
   }
 
   const auto& items = app.m_pyItems;
 
-  // Lookup character name
+  // Lookup character name and occupancy
   std::string characterName, characterOccu, title;
   for (const auto& item : items) {
     if (item.key == "name") {
@@ -792,6 +803,7 @@ void MyFrame::OnScanCharaUpdate(wxThreadEvent& evt) {
 
   if (!characterName.size()) return;
 
+  // Delete default placeholder page if exists
   if (m_player_ctrls.find("default") != m_player_ctrls.end()) {
     unsigned count = m_notebook->GetPageCount();
     m_notebook->GetPage(count - 1)->DestroyChildren();
@@ -801,8 +813,9 @@ void MyFrame::OnScanCharaUpdate(wxThreadEvent& evt) {
 
   // TODO : check for character who no longer exists
 
-  // Store character name to address
+  // Format into name/profession
   title = characterName + "/" + characterOccu;
+  // Store character name to address
   app.m_baseCharacters[title] = payload.first;
 
   if (m_player_ctrls.find(title) != m_player_ctrls.end()) {
@@ -831,6 +844,7 @@ void MyFrame::OnScanCharaUpdate(wxThreadEvent& evt) {
       }
     }
 
+    // Delete overflowed dataview items
     while (ctrl->RowToItem(i).IsOk()) {
       ctrl->DeleteItem(i);
       i++;
@@ -838,7 +852,7 @@ void MyFrame::OnScanCharaUpdate(wxThreadEvent& evt) {
 
     ctrl->Layout();
 
-  } else {
+  } else {  // If the character wasn't exist yet
     // Create new panel and append new page
     m_notebook->AddPage(CreateCharaPage(m_notebook, items, title), title);
   }
@@ -856,11 +870,8 @@ void MyFrame::OnInstallHookDone(wxThreadEvent& evt) {
 }
 
 void MyFrame::OnAbout(wxCommandEvent& WXUNUSED(event)) {
-  wxAboutDialogInfo info;
-  info.SetName(m_title);
-  info.SetWebSite("https://github.com/saptarian");
-
-  wxAboutBox(info, this);
+  AboutDialog aboutDialog(this, wxID_ANY, m_title);
+  aboutDialog.ShowModal();
 }
 
 void MyFrame::OnExit(wxCommandEvent& WXUNUSED(event)) { Close(true); }
@@ -903,6 +914,7 @@ void MyFrame::DoLoadConfig(const wxString& config) {
 
   for (char c : config) {
     try {
+      // Toggle item state depending on last saved state
       DoToggle(m_Items.at(i), c == '1', i);
       i++;
     } catch (const std::out_of_range& ex) {
@@ -964,7 +976,7 @@ void MyFrame::OnEnsureScanAll(wxCommandEvent& WXUNUSED(event)) {
 void MyFrame::OnItemContextMenu(wxDataViewEvent& event) {
   enum { Id_Rescan };
   wxMenu menu;
-  menu.Append(Id_Rescan, "&ReScan");
+  menu.Append(Id_Rescan, "&ReScan", "Rescan if it doesn’t work yet.");
 
   const wxDataViewItem item = event.GetItem();
   if (!item.IsOk()) return;
@@ -996,15 +1008,19 @@ void MyFrame::OnStatusBarSize(wxSizeEvent& event) {
 }
 
 void MyFrame::OnEditValue(wxDataViewEvent& event) {
+  // Which dataviewctrl is invoked
   wxDataViewListCtrl* ctrl =
       dynamic_cast<wxDataViewListCtrl*>(event.GetEventObject());
+  // Which row is invoked
   int row = ctrl->ItemToRow(event.GetItem());
 
   MyApp& app = wxGetApp();
   wxCriticalSectionLocker locker(app.m_critsect);
   if (app.m_pyItems.empty()) return;
   auto& item = app.m_pyItems.at(row);
+  // Ensure user editing the right element
   if (item.key != ctrl->GetTextValue(row, 0)) return;
+  // Ensure only integer and float python data type are editable
   if (item.val_type != "float" && item.val_type != "int") return;
 
   app.m_editing = true;
@@ -1014,11 +1030,12 @@ void MyFrame::OnEditValue(wxDataViewEvent& event) {
   if (!newValue.IsEmpty() && item.valueAddress && app.m_pyLongBasePtr) {
     if (item.val_type == "float") {
       double dblVal;
+      // Validate user input
       if (newValue.ToDouble(&dblVal) && dblVal >= 0) {
         ctrl->SetValue(wxVariant(dblVal).GetString(), row, 1);
 
-        // Update the memory
         try {
+          // Update the memory
           GameManager(app.m_gamePid)
               .WriteMemory((double*)item.valueAddress, &dblVal);
         } catch (const std::exception& ex) {
@@ -1031,15 +1048,18 @@ void MyFrame::OnEditValue(wxDataViewEvent& event) {
       }
     } else {
       int intVal;
+      // Validate user input
       if (newValue.ToInt(&intVal) && intVal >= 0 && intVal <= 255) {
         ctrl->SetValue(wxVariant(intVal).GetString(), row, 1);
 
+        // Ensure the input is between 0-255
         intVal = max(min(intVal, 255), 0);
+        // From integer get python pointer to spesific value
         py::PyIntObject* pyIntValue =
             (py::PyIntObject*)app.m_pyLongBasePtr + intVal;
 
-        // Update the memory
         try {
+          // Update the memory
           GameManager(app.m_gamePid)
               .WriteMemory((uintptr_t*)item.valueAddress, &pyIntValue);
         } catch (const std::exception& ex) {
@@ -1066,6 +1086,7 @@ void MyFrame::OnItemValueChanged(wxDataViewEvent& event) {
 
   if (event.GetColumn() != Col_Active) return;
 
+  // Get toggle state from checkbox UI component
   bool enable = m_entry_ctrl->GetToggleValue(rowChanged, Col_Active);
   DoToggle(m_Items.at(rowChanged), enable, rowChanged, Col_Active);
 }
@@ -1082,7 +1103,7 @@ MyThread::~MyThread() {
   threads.Remove(this);
 
   if (threads.IsEmpty()) {
-    // signal the main thread that there are no more threads left if it is
+    // Signal the main thread that there are no more threads left if it is
     // waiting for us
     if (app.m_shuttingDown) {
       app.m_shuttingDown = false;
@@ -1141,7 +1162,7 @@ wxThread::ExitCode LookupThread::Entry() {
 
       if (app.m_shuttingDown) return NULL;
       app.m_gamePid = util::GetProcessID(game_ext.mb_str());
-      // Game found, got process Id
+      // Game found and got process Id
       if (app.m_gamePid) break;
     }
 
@@ -1165,7 +1186,7 @@ wxThread::ExitCode BackgroundScanAll::Entry() {
       if (app.m_shuttingDown) return NULL;
     }
 
-    // Do our real loop scanning for every item
+    // Do our main loop scanning for every item
     for (auto& item : *m_items) {
       if (this->TestDestroy()) return NULL;
       try {
@@ -1179,11 +1200,7 @@ wxThread::ExitCode BackgroundScanAll::Entry() {
       } catch (const std::exception& ex) {
         // TODO
       }
-      // Delay between entries
-      wxThread::Sleep(100);
     }
-    // Delay between number of batch
-    wxThread::Sleep(1000 * 5);
   }
 
   return (wxThread::ExitCode)0;  // success
@@ -1193,7 +1210,7 @@ wxThread::ExitCode BackgroundScanAll::Entry() {
 
 wxThread::ExitCode ScanningAllThread::Entry() {
   const unsigned count = m_items->size();
-  if (count < 1) return Reject("There is not item to scan.");
+  if (count < 1) return Reject("There is no item to scan.");
 
   const unsigned minimumItemOk = (count < 3) ? 1 : 3;
   const auto start = std::chrono::steady_clock::now();
@@ -1203,7 +1220,7 @@ wxThread::ExitCode ScanningAllThread::Entry() {
     wxQueueEvent(m_frame, e->Clone());
 
     bool allItemsCompleted = true;
-    // Do our real loop scanning for every item
+    // Do our main loop scanning for every item
     for (unsigned i = 0; i < count; i++) {
       if (this->TestDestroy()) return NULL;
 
@@ -1219,7 +1236,7 @@ wxThread::ExitCode ScanningAllThread::Entry() {
         for (auto& record : m_items->at(i).records) {
           try {
             record.EnsureScan(app.m_gamePid);
-            // Check scanned records was ok
+            // Check scanned records were ok
             if (record.Address()) adrFound++;
           } catch (const std::exception& ex) {
             return Reject(wxString::Format("Error: %s", ex.what()));
@@ -1228,7 +1245,7 @@ wxThread::ExitCode ScanningAllThread::Entry() {
       }
 
       bool itemOK = false;
-      // Check every record in an item were ok
+      // Check every record in an item was ok
       if (adrFound == recordCount) {
         itemOK = true;
       }
@@ -1239,7 +1256,7 @@ wxThread::ExitCode ScanningAllThread::Entry() {
            static_cast<double>(i) / static_cast<double>(count - 2)});
       wxQueueEvent(m_frame, e->Clone());
 
-      // check if first minimum required are OK,
+      // Check if the first minimum required are OK,
       // otherwise start from beginning
       if (i < minimumItemOk && !itemOK) {
         allItemsCompleted = false;
@@ -1247,17 +1264,17 @@ wxThread::ExitCode ScanningAllThread::Entry() {
       }
     }
 
-    // full scan done isn't it?
+    // Full scan done isn't it?
     if (allItemsCompleted) break;
 
-    // didn't meet requirement, delay for next try
+    // Wasn't meet the requirement, delay for next try
     wxThread::Sleep(1000);
 
     // Check for timeout
     auto now = std::chrono::steady_clock::now();
     if (std::chrono::duration_cast<std::chrono::seconds>(now - start).count() >
         60) {  // 60 seconds timeout
-      return Reject("Timeout! might the game wasn't fully running");
+      return Reject("Timeout! The game might not be fully running.");
     }
   }
 
@@ -1361,7 +1378,7 @@ wxThread::ExitCode InstallHook::Entry() {
     app.m_pyLongBasePtr =
         game.FindPattern(pyLongPattern, app.m_pyModuleBaseAdr);
     if (!app.m_pyLongBasePtr) {
-      return Reject("Python type::long pattern was not found.");
+      return Reject("py::type::long was not found in memory.");
     }
 
     uintptr_t adr = app.m_pyModuleBaseAdr + app.m_pyHookOffset;

@@ -1,6 +1,6 @@
 BUILD_DIR = build
 OUTPUT = $(BUILD_DIR)\Terminus_ExternalHack.exe
-SRCS = util.cpp gmanager.cpp entry.cpp custom.cpp constants.cpp main.cpp sample.rc
+SRCS = util.cpp gmanager.cpp pymemory.cpp entry.cpp custom.cpp constants.cpp main.cpp sample.rc
 OBJS = $(SRCS:%=$(BUILD_DIR)/%.o)
 
 CXX = i686-w64-mingw32-g++
@@ -8,10 +8,10 @@ CXXFLAGS = -O2 -W -Wall -std=c++20 -mthreads -MD -MP \
 	-D__WXMSW__ -D_UNICODE -DNDEBUG
 LDFLAGS = -Wl,--subsystem,windows -static \
 	-static-libgcc -static-libstdc++ -mwindows
-CXXINCLUDES = -I.. -I..\include -I..\lib\Win32\Release\mswu \
-	-ID:\suspect\me\CProject\json\include \
-	-ID:\suspect\me\CProject\json2cpp\include \
-	-IC:\Users\LENOVO\.conda\envs\py379\include
+CXXINCLUDES = -I.. -I..\include \
+	-I..\lib\Win32\Release\mswu \
+	-I.\thirdparty\json2cpp\include \
+	-I.\thirdparty\Python3.7.9\include
 WXLIBS=-L..\lib\Win32\Release -lwxmsw32u_core -lwxbase32u \
 	-lwxtiff -lwxjpeg -lwxpng -lwxzlib -lwxregexu -lwxexpat
 WINLIBS=-lkernel32 -luser32 -lgdi32 -lcomdlg32 -lwinspool -lwinmm \
@@ -20,7 +20,11 @@ WINLIBS=-lkernel32 -luser32 -lgdi32 -lcomdlg32 -lwinspool -lwinmm \
 
 ### Targets: ###
 
-all: $(OUTPUT)
+# Default target
+all: pre-build $(OUTPUT)
+
+pre-build:
+	@./build_counter
 
 clean:
 	-if exist $(BUILD_DIR)\*.o del $(BUILD_DIR)\*.o
@@ -39,4 +43,4 @@ $(BUILD_DIR)/sample.rc.o: ..\sample.rc
 $(BUILD_DIR)/%.cpp.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@ $(CXXINCLUDES)
 
-.PHONY: all clean
+.PHONY: pre-build all clean
