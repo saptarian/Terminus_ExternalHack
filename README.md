@@ -16,8 +16,8 @@ User-Friendly Interface: Simple and intuitive design for a seamless user experie
 Customization: Allows users to modify settings according to their preferences.
 
 ## Screenshots
-![image1](https://github.com/user-attachments/assets/cba67c00-7f1a-4430-9b13-04617562f231)
-![image2](https://github.com/user-attachments/assets/aee08b82-66d7-4c16-ad96-87712dfa6cec)
+![image1](https://github.com/user-attachments/assets/18994ba8-65fa-4d28-9598-17950c5b7f83)
+![image1](https://github.com/user-attachments/assets/89eeea3e-c68f-45fd-9a7f-32a32e25a4a3)
 
 ## License
 This project is licensed under the MIT License - see the LICENSE.md file for details.
